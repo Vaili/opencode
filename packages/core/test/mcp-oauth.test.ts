@@ -243,13 +243,61 @@ describe("MCP OAuth", () => {
     const result = await auth(oauthProvider, { serverUrl: server.url.href }).finally(() => server.stop(true))
 
     expect(result).toBe("AUTHORIZED")
-    expect(tokenRequests).toHaveLength(1)
-    expect(tokenRequests[0]?.get("grant_type")).toBe("refresh_token")
+    // Connecting already refreshed the expired row; the explicit auth call refreshes again.
+    expect(tokenRequests).toHaveLength(2)
+    expect(tokenRequests.map((request) => request.get("grant_type"))).toEqual(["refresh_token", "refresh_token"])
     expect(tokenRequests[0]?.get("refresh_token")).toBe("refresh")
     // The refreshed tokens land on the same credential row, stamped with the issuer they were minted by.
     const stored = store.rows.get(Credential.ID.make("cred_test"))?.value
     expect(stored?.type === "oauth" && stored.access).toBe("next")
     expect(stored?.type === "oauth" && stored.metadata?.issuer).toBe(server.url.href)
+  })
+
+  test("refreshes an expired stored credential before the first request", async () => {
+    const tokenRequests: URLSearchParams[] = []
+    const server = Bun.serve({
+      port: 0,
+      async fetch(request) {
+        const url = new URL(request.url)
+        if (url.pathname === "/.well-known/oauth-authorization-server")
+          return Response.json({
+            issuer: url.origin,
+            authorization_endpoint: `${url.origin}/authorize`,
+            token_endpoint: `${url.origin}/token`,
+            response_types_supported: ["code"],
+          })
+        if (request.method !== "POST" || url.pathname !== "/token") return new Response(null, { status: 404 })
+        tokenRequests.push(new URLSearchParams(await request.text()))
+        return Response.json({ access_token: "next", token_type: "Bearer" })
+      },
+    })
+    const store = memoryCredentials([credential({ access: "expired", refresh: "refresh", url: server.url.href })])
+
+    await connectProvider(remote(server.url.href), store).finally(() => server.stop(true))
+
+    expect(tokenRequests).toHaveLength(1)
+    expect(tokenRequests[0]?.get("grant_type")).toBe("refresh_token")
+    expect(tokenRequests[0]?.get("refresh_token")).toBe("refresh")
+    const stored = store.rows.get(Credential.ID.make("cred_test"))?.value
+    expect(stored?.type === "oauth" && stored.access).toBe("next")
+  })
+
+  test("leaves an unexpired stored credential alone", async () => {
+    let requested = 0
+    const server = Bun.serve({
+      port: 0,
+      fetch() {
+        requested += 1
+        return new Response(null, { status: 404 })
+      },
+    })
+    const store = memoryCredentials([
+      credential({ access: "valid", refresh: "refresh", expires: Date.now() + 60_000, url: server.url.href }),
+    ])
+
+    await connectProvider(remote(server.url.href), store).finally(() => server.stop(true))
+
+    expect(requested).toBe(0)
   })
 
   test("reports needs_auth for an unauthorized server without registering a client", async () => {

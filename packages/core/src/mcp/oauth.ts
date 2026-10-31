@@ -287,7 +287,7 @@ export const connectProvider = Effect.fnUntraced(function* (input: {
   }
   // Refresh tokens rotate and the row is shared across connections: only drop it while it still holds ours.
   let presented = found.value.refresh
-  return provider({
+  const authProvider = provider({
     config: input.config,
     invalidate: async (scope) => {
       if (scope === "verifier" || scope === "discovery") return
@@ -327,6 +327,19 @@ export const connectProvider = Effect.fnUntraced(function* (input: {
       saveCodeVerifier: async () => {},
     },
   })
+  // The SDK refreshes only after a 401. A server that answers an expired bearer with 429 or another
+  // status never triggers that, so refresh an expired credential before the first request.
+  if (found.value.refresh && found.value.expires > 0 && found.value.expires <= Date.now())
+    yield* Effect.tryPromise({
+      try: () => auth(authProvider, { serverUrl: input.config.url, fetchFn: send }),
+      catch: (error) => (error instanceof Error ? error : new Error(String(error))),
+    }).pipe(
+      Effect.tapError((error) =>
+        Effect.logWarning("mcp oauth refresh before connect failed", { url: input.config.url, error: error.message }),
+      ),
+      Effect.ignore,
+    )
+  return authProvider
 })
 
 export const authorize = (input: {
