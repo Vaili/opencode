@@ -92,6 +92,7 @@ export function make(input: {
       value,
     )
     yield* input.sessions.select(attached, change)
+    return change
   })
 
   const getSession = Effect.fnUntraced(function* (sessionId: string, cwd: string) {
@@ -227,8 +228,11 @@ export function make(input: {
       const attached = yield* input.sessions.require(params.sessionId)
       const value = params.value
       if (typeof value !== "string") return yield* new ACPError.InvalidConfigOptionError({ configId: params.configId })
-      yield* withReload(attached, select(attached, params.configId, value))
-      return { configOptions: yield* currentOptions(attached) }
+      const change = yield* withReload(attached, select(attached, params.configId, value))
+      // A late echo of an earlier switch can overwrite the Ref before this response is built, so
+      // answer from the selection just made instead of reading it back.
+      const selection = { ...(yield* Ref.get(attached.selection)), ...change }
+      return { configOptions: configOptions(yield* input.catalog.get(attached.cwd), selection) }
     }),
     setSessionMode: Effect.fnUntraced(function* (params) {
       const attached = yield* input.sessions.require(params.sessionId)

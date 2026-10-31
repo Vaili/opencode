@@ -1,8 +1,49 @@
 import { describe, expect, test } from "bun:test"
 import { currentValue } from "./select-options"
-import { rpcError, secondModel, startWire } from "./wire-fixture"
+import { durableEvent, rpcError, secondModel, startWire } from "./wire-fixture"
 
 describe("acp catalog and config options over the wire", () => {
+  test("answers with the selection just made when an older switch echo lands late", async () => {
+    let modelSwitches = 0
+    let release = () => {}
+    const held = new Promise<void>((resolve) => (release = resolve))
+    await using acp = await startWire({
+      fetch: (request) => {
+        if (request.method !== "POST" || !request.path.endsWith("/model")) return undefined
+        modelSwitches += 1
+        return modelSwitches === 2 ? held.then(() => undefined) : undefined
+      },
+    })
+    await acp.initialize()
+    const sessionId = (await acp.newSession()).sessionId
+    const set = (value: string) => acp.request("session/set_config_option", { sessionId, configId: "model", value })
+
+    expect(currentValue(await set("test/second-model"), "model")).toBe("test/second-model")
+    const pending = set("test/test-model")
+    await acp.until(
+      () =>
+        acp.server.requests.filter((request) => request.method === "POST" && request.path.endsWith("/model")).length === 2,
+      "held model switch",
+    )
+    // The echo of the first switch arrives while the second switch is still in flight.
+    acp.server.send(
+      durableEvent("session.model.selected", {
+        sessionID: sessionId,
+        model: { providerID: "test", id: secondModel.id },
+      }),
+    )
+    await acp.waitForUpdate(
+      (update) =>
+        update.sessionId === sessionId &&
+        update.update.sessionUpdate === "config_option_update" &&
+        currentValue(update.update, "model") === "test/second-model",
+      "late model echo",
+    )
+    release()
+
+    expect(currentValue(await pending, "model")).toBe("test/test-model")
+  })
+
   test("switches model, effort, and mode against the warm catalog", async () => {
     await using acp = await startWire()
     acp.server.catalog.models.push({ ...secondModel, providerID: "test/sub" })
