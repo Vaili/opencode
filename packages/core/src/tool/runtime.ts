@@ -167,7 +167,18 @@ const outputJsonSchema = (schema: Tool.ValueSchema<any>): JsonSchema.JsonSchema 
 
 const standardJsonSchema = (schema: StandardSchemaV1<any, any>, io: "input" | "output"): JsonSchema.JsonSchema => {
   if (isStandardJSONSchema(schema)) return schema["~standard"].jsonSchema[io]({ target: "draft-2020-12" })
-  if (schema instanceof $ZodType) return toJSONSchema(schema, { target: "draft-2020-12", io })
+  if (schema instanceof $ZodType)
+    return toJSONSchema(schema, {
+      target: "draft-2020-12",
+      io,
+      // Zod keeps descriptions in a per-copy registry. A schema from a plugin's own zod copy is
+      // invisible to our registry, but its `description` getter still reads the plugin's registry.
+      override: ({ zodSchema, jsonSchema }) => {
+        const description = (zodSchema as { description?: unknown }).description
+        if (typeof description === "string" && jsonSchema.description === undefined)
+          jsonSchema.description = description
+      },
+    })
   throw new Error(`Schema vendor "${schema["~standard"].vendor}" does not support JSON Schema conversion`)
 }
 

@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test"
 import { Effect, Schema, SchemaGetter } from "effect"
 import { z } from "zod"
+import { globalRegistry } from "zod/v4/core"
 import { emptyInputJsonSchema } from "@opencode/ai/effect"
 import { Agent } from "@opencode/schema/agent"
 import { Session } from "@opencode/schema/session"
@@ -289,8 +290,42 @@ test("portable schemas validate and describe typed tools", async () => {
   expect(result.output).toBe("42")
 })
 
-test("Zod schemas validate, transform, and describe typed tools", async () => {
+test("Zod descriptions survive when the schema cannot convert itself", () => {
+  const rule = z.string().min(1).max(120).describe("Short rule name, at most 120 characters")
+  const input = z.object({ rule: rule.optional() })
+  // A plugin's own zod copy keeps descriptions in its own registry, and older 4.1.x copies do not
+  // expose `~standard.jsonSchema`. Reproduce that state: our registry has no entry, the schema's
+  // getter still returns the description, and `standardJsonSchema` has to fall back to toJSONSchema.
+  const description = rule.description
+  globalRegistry.remove(rule)
+  globalRegistry.remove(input)
+  Object.defineProperty(rule, "description", { value: description })
+  Object.defineProperty(input, "~standard", {
+    value: { vendor: "zod", version: 1, validate: () => ({ value: input }) },
+  })
+
   const tool: Info = {
+    name: "foreign-zod",
+    description: "Foreign Zod tool",
+    input,
+    execute: () => Effect.succeed({ content: "unused" }),
+  }
+
+  expect(definition(tool).inputSchema).toEqual({
+    $schema: "https://json-schema.org/draft/2020-12/schema",
+    type: "object",
+    properties: {
+      rule: {
+        type: "string",
+        minLength: 1,
+        maxLength: 120,
+        description: "Short rule name, at most 120 characters",
+      },
+    },
+  })
+})
+
+test("Zod schemas validate, transform, and describe typed tools", async () => {  const tool: Info = {
     name: "zod",
     description: "Zod tool",
     input: z.object({ count: z.string().transform(Number) }),
