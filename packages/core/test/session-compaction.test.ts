@@ -21,6 +21,7 @@ import type { SessionContext } from "@opencode/core/session/context"
 import { MessageDecodeError } from "@opencode/core/session/error"
 import { SessionEvent } from "@opencode/core/session/event"
 import { SessionHistory } from "@opencode/core/session/history"
+import { SessionRecentText } from "@opencode/core/session/recent-text"
 import { SessionMessage } from "@opencode/core/session/message"
 import { SessionModelRequest } from "@opencode/core/session/model-request"
 import { PluginHooks } from "@opencode/core/plugin/hooks"
@@ -129,6 +130,38 @@ test("compaction prompt preserves detailed work state and relevant files", () =>
   expect(prompt).toContain("### Active")
   expect(prompt).toContain("### Blocked")
   expect(prompt).toContain("## Relevant Files")
+})
+
+test("compaction recent text keeps text attachment contents", () => {
+  const body = "retained attachment body"
+  const text = SessionRecentText.messageToText(
+    SessionMessage.User.make({
+      id: SessionMessage.ID.create(),
+      type: "user",
+      text: "see attached",
+      files: [
+        {
+          data: Buffer.from(body).toString("base64"),
+          mime: "text/plain",
+          source: { type: "inline" },
+          name: "pasted.txt",
+        },
+        {
+          data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB",
+          mime: "image/png",
+          source: { type: "inline" },
+          name: "pixel.png",
+        },
+      ],
+      time: { created: DateTime.makeUnsafe(0) },
+    }),
+  )
+
+  expect(text).toContain("[Attached text/plain: pasted.txt]")
+  expect(text).toContain(body)
+  // Binary attachments stay labels; their bytes are not text for the model.
+  expect(text).toContain("[Attached image/png: pixel.png]")
+  expect(text).not.toContain("iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB")
 })
 
 it.effect("compaction describes tool media without embedding base64", () =>

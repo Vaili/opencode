@@ -28,7 +28,11 @@ export const messageToText = (message: SessionMessage.Info | SessionStored.User)
       const files =
         message.files?.map((file) => {
           const name = file.name ?? (file.source.type === "uri" ? file.source.uri : "inline attachment")
-          return `[Attached ${file.mime}: ${name}]`
+          const label = `[Attached ${file.mime}: ${name}]`
+          // The retained tail rebuilds messages as text. Text attachments are part of the conversation, so
+          // keep their contents instead of a label; binary bytes stay out of the model's context.
+          if (file.mime !== "text/plain" || !("data" in file)) return label
+          return `${label}\n${Buffer.from(file.data, "base64").toString("utf8")}`
         }) ?? []
       return [...skills, `[User]: ${message.text}`, ...files].join("\n")
     }
